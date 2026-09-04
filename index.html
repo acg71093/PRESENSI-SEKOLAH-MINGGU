@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Presensi Wajah - Sekolah Minggu</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --primary: #2563eb; --primary-dark: #1d4ed8; --success: #16a34a;
+      --danger: #dc2626; --bg: #f1f5f9; --card: #ffffff; --text: #0f172a; --muted: #64748b;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: var(--bg); color: var(--text); margin: 0; padding: 16px; max-width: 560px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p.subtitle { color: var(--muted); margin: 0 0 16px; font-size: 14px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tab { flex: 1; padding: 10px; text-align: center; background: var(--card); border: 1px solid #e2e8f0;
+      border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; color: var(--muted); }
+    .tab.active { background: var(--primary); color: white; border-color: var(--primary); }
+    .card { background: var(--card); border-radius: 14px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 16px; }
+    .video-wrap { position: relative; width: 100%; max-width: 480px; margin: 0 auto; }
+    video, canvas { width: 100%; border-radius: 10px; background: #000; }
+    canvas { position: absolute; top: 0; left: 0; }
+    .row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    input[type=text] { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 14px; margin-top: 8px; }
+    button { background: var(--primary); color: white; border: none; border-radius: 8px; padding: 10px 16px;
+      font-size: 14px; font-weight: 600; cursor: pointer; flex: 1; }
+    button:hover { background: var(--primary-dark); }
+    button.secondary { background: #e2e8f0; color: var(--text); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status, #statusReg { margin-top: 12px; padding: 10px; border-radius: 8px; font-size: 14px; display: none; }
+    .ok { display: block !important; background: #dcfce7; color: #166534; }
+    .err { display: block !important; background: #fee2e2; color: #991b1b; }
+    .info { display: block !important; background: #dbeafe; color: #1e3a8a; }
+    .hidden { display: none !important; }
+    ul#todayList { list-style: none; padding: 0; margin: 8px 0 0; max-height: 200px; overflow-y: auto; }
+    ul#todayList li { padding: 8px; border-bottom: 1px solid #f1f5f9; font-size: 14px; display: flex; justify-content: space-between; }
+    .loading { text-align: center; color: var(--muted); font-size: 14px; padding: 20px; }
+    .config-warning { background: #fef3c7; color: #92400e; padding: 12px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <h1>👦👧 Presensi Wajah Sekolah Minggu</h1>
+  <p class="subtitle">Data tersimpan otomatis ke Google Spreadsheet</p>
+
+  <div id="configWarning" class="config-warning hidden">
+    ⚠️ Belum diatur: buka file ini, ganti nilai <code>API_URL</code> di bagian bawah kode dengan URL Web App Apps Script kamu.
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" id="tabAttendanceBtn" onclick="switchTab('attendance')">✅ Absensi</div>
+    <div class="tab" id="tabRegisterBtn" onclick="switchTab('register')">➕ Daftar Wajah Baru</div>
+  </div>
+
+  <div id="loadingModels" class="loading">Memuat model pengenalan wajah, mohon tunggu...</div>
+
+  <div id="tabAttendance" class="hidden">
+    <div class="card">
+      <div class="video-wrap">
+        <video id="videoAtt" autoplay muted playsinline></video>
+        <canvas id="canvasAtt"></canvas>
+      </div>
+      <div class="row">
+        <button id="startAttBtn" onclick="startAttendanceMode()">Mulai Kamera & Absensi</button>
+        <button class="secondary" onclick="stopCamera('videoAtt')">Berhenti</button>
+      </div>
+      <div id="status"></div>
+    </div>
+    <div class="card">
+      <strong>Sudah presensi hari ini:</strong>
+      <ul id="todayList"><li style="color:#94a3b8">Belum ada</li></ul>
+    </div>
+  </div>
+
+  <div id="tabRegister" class="hidden">
+    <div class="card">
+      <div class="video-wrap">
+        <video id="videoReg" autoplay muted playsinline></video>
+        <canvas id="canvasReg"></canvas>
+      </div>
+      <input type="text" id="regNama" placeholder="Nama lengkap anak">
+      <input type="text" id="regKelas" placeholder="Kelas / kelompok (contoh: Balita, Kelas 1-2)">
+      <div class="row">
+        <button onclick="startCamera('videoReg')">Nyalakan Kamera</button>
+        <button onclick="captureFace()">📸 Ambil & Simpan Wajah</button>
+      </div>
+      <div id="statusReg"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <script>
+    // >>> GANTI DENGAN URL WEB APP APPS SCRIPT KAMU (yang berakhiran /exec) <<<
+    const API_URL = 'https://script.google.com/macros/s/AKfycbwnTkJpOLOTfDo87uoni7xZAkArkrg63n2PcAG3Q9FRdhMOsEOi4bSbWYYAebldGxx9eA/exec';
+
+    if (!API_URL || API_URL.indexOf('PASTE_URL') !== -1) {
+      document.getElementById('configWarning').classList.remove('hidden');
+    }
+
+    const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
+    let modelsReady = false;
+    let students = [];
+    let attendanceInterval = null;
+
+    async function loadModels() {
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+      modelsReady = true;
+      document.getElementById('loadingModels').classList.add('hidden');
+      switchTab('attendance');
+      refreshStudents();
+      refreshTodayList();
+    }
+    loadModels().catch(err => {
+      document.getElementById('loadingModels').innerText =
+        'Gagal memuat model. Cek koneksi internet lalu muat ulang halaman. (' + err + ')';
+    });
+
+    async function apiGet(action) {
+      const res = await fetch(API_URL + '?action=' + action);
+      return res.json();
+    }
+    async function apiPost(body) {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // hindari CORS preflight
+        body: JSON.stringify(body)
+      });
+      return res.json();
+    }
+
+    function refreshStudents() {
+      apiGet('getStudents').then(list => { students = list; })
+        .catch(err => showStatus('status', 'err', 'Gagal memuat data siswa: ' + err));
+    }
+
+    function refreshTodayList() {
+      apiGet('getTodayAttendance').then(list => {
+        const ul = document.getElementById('todayList');
+        ul.innerHTML = '';
+        if (!list.length) { ul.innerHTML = '<li style="color:#94a3b8">Belum ada</li>'; return; }
+        list.forEach(item => {
+          const li = document.createElement('li');
+          li.innerHTML = '<span>' + item.nama + '</span><span>' + item.jam + '</span>';
+          ul.appendChild(li);
+        });
+      }).catch(() => {});
+    }
+
+    function switchTab(tab) {
+      document.getElementById('tabAttendance').classList.toggle('hidden', tab !== 'attendance');
+      document.getElementById('tabRegister').classList.toggle('hidden', tab !== 'register');
+      document.getElementById('tabAttendanceBtn').classList.toggle('active', tab === 'attendance');
+      document.getElementById('tabRegisterBtn').classList.toggle('active', tab === 'register');
+      if (tab !== 'attendance' && attendanceInterval) { clearInterval(attendanceInterval); attendanceInterval = null; }
+    }
+
+    async function startCamera(videoId) {
+      const video = document.getElementById(videoId);
+      if (video.srcObject) return;
+      const statusElId = videoId === 'videoReg' ? 'statusReg' : 'status';
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showStatus(statusElId, 'err', 'Browser ini tidak mendukung akses kamera. Coba Chrome/Safari terbaru.');
+        return;
+      }
+      if (!window.isSecureContext) {
+        showStatus(statusElId, 'err', 'Halaman harus dibuka lewat HTTPS agar kamera bisa diakses.');
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+        video.srcObject = stream;
+        try { await video.play(); } catch (e) {}
+        showStatus(statusElId, 'ok', '📷 Kamera aktif.');
+      } catch (err) {
+        let msg = 'Gagal mengakses kamera (' + err.name + ').';
+        if (err.name === 'NotAllowedError') msg = 'Izin kamera ditolak. Klik ikon 🔒 di address bar, ubah izin Camera jadi "Allow", lalu muat ulang halaman.';
+        else if (err.name === 'NotFoundError') msg = 'Tidak ditemukan kamera di perangkat ini.';
+        else if (err.name === 'NotReadableError') msg = 'Kamera sedang dipakai aplikasi lain. Tutup aplikasi tersebut lalu coba lagi.';
+        showStatus(statusElId, 'err', msg);
+      }
+    }
+
+    function stopCamera(videoId) {
+      const video = document.getElementById(videoId);
+      if (video.srcObject) { video.srcObject.getTracks().forEach(t => t.stop()); video.srcObject = null; }
+      if (attendanceInterval) { clearInterval(attendanceInterval); attendanceInterval = null; }
+    }
+
+    function showStatus(elId, type, message) {
+      const el = document.getElementById(elId);
+      el.className = type;
+      el.innerText = message;
+    }
+
+    async function startAttendanceMode() {
+      if (!modelsReady) return;
+      refreshStudents();
+      await startCamera('videoAtt');
+      const video = document.getElementById('videoAtt');
+      const canvas = document.getElementById('canvasAtt');
+
+      if (attendanceInterval) clearInterval(attendanceInterval);
+      attendanceInterval = setInterval(async () => {
+        if (video.readyState !== 4) return;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+          .withFaceLandmarks().withFaceDescriptor();
+
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!detection) return;
+        faceapi.draw.drawDetections(canvas, [detection]);
+
+        if (!students.length) {
+          showStatus('status', 'info', 'Belum ada wajah terdaftar. Daftarkan dulu di tab "Daftar Wajah Baru".');
+          return;
+        }
+
+        let best = null, bestDist = 999;
+        students.forEach(s => {
+          const dist = faceapi.euclideanDistance(detection.descriptor, s.descriptor);
+          if (dist < bestDist) { bestDist = dist; best = s; }
+        });
+
+        const THRESHOLD = 0.5;
+        if (best && bestDist < THRESHOLD) {
+          const confidence = 1 - bestDist;
+          showStatus('status', 'info', 'Mengenali: ' + best.nama + '...');
+          clearInterval(attendanceInterval); attendanceInterval = null;
+          apiPost({ action: 'recordAttendance', nama: best.nama, kelas: best.kelas, confidence }).then(res => {
+            if (res.success) { showStatus('status', 'ok', '✅ ' + res.message); refreshTodayList(); }
+            else if (res.alreadyPresent) showStatus('status', 'info', 'ℹ️ ' + res.message);
+            else showStatus('status', 'err', res.message);
+            setTimeout(() => { if (document.getElementById('videoAtt').srcObject) startAttendanceMode(); }, 2500);
+          }).catch(err => showStatus('status', 'err', 'Gagal menyimpan presensi: ' + err));
+        } else {
+          showStatus('status', 'info', 'Wajah belum dikenali. Arahkan wajah ke kamera dengan jelas.');
+        }
+      }, 1200);
+    }
+
+    async function captureFace() {
+      if (!modelsReady) return;
+      const nama = document.getElementById('regNama').value.trim();
+      const kelas = document.getElementById('regKelas').value.trim();
+      if (!nama) { showStatus('statusReg', 'err', 'Isi nama anak dulu.'); return; }
+
+      const video = document.getElementById('videoReg');
+      if (!video.srcObject) { showStatus('statusReg', 'err', 'Nyalakan kamera dulu.'); return; }
+
+      showStatus('statusReg', 'info', 'Mendeteksi wajah...');
+      const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks().withFaceDescriptor();
+
+      if (!detection) {
+        showStatus('statusReg', 'err', 'Wajah tidak terdeteksi. Pastikan pencahayaan cukup dan wajah menghadap kamera.');
+        return;
+      }
+
+      const descriptorArray = Array.from(detection.descriptor);
+      apiPost({ action: 'registerStudent', nama, kelas, descriptor: descriptorArray }).then(res => {
+        if (res.success) { showStatus('statusReg', 'ok', '✅ ' + res.message); document.getElementById('regNama').value = ''; refreshStudents(); }
+        else showStatus('statusReg', 'err', res.message);
+      }).catch(err => showStatus('statusReg', 'err', 'Gagal menyimpan: ' + err));
+    }
+  </script>
+</body>
+</html>
